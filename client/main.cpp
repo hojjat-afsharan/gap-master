@@ -12,20 +12,26 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
-#include <iostream>
-#include <string>
-#include <array>
+void error(const char* message) {
+    perror(message);
+    exit(0);
+}
 
-#include "argh.h"
-#include "exceptions.h"
+int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "usage %s hostname port\n", argv[0]);
+        exit(0);
+    }
 
-namespace gap {
-namespace client {
-
-auto get_server_address(std::string name, int portno) {
-    auto server = gethostbyname(name.c_str());
+    auto portno = atoi(argv[2]);
+    auto sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0)
+        error("ERROR opening socket.");
+    
+    auto server = gethostbyname(argv[1]);
     if (server == NULL) {
-        throw std::runtime_error{ "No such host"};
+        fprintf(stderr, "ERROR, no such host.\n");
+        exit(0);
     }
 
     struct sockaddr_in serv_addr;
@@ -34,79 +40,23 @@ auto get_server_address(std::string name, int portno) {
     bcopy((char *) server->h_addr, (char*)&serv_addr.sin_addr.s_addr, server->h_length);
     serv_addr.sin_port = htons(portno);
 
-    return serv_addr;
-}
+    if (connect(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
+        error("ERROR connecting.");
+    printf("Please enter the message: ");
 
-struct client {
-    client(std::string address, int port) {
-        fd_ = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd_ < 0)
-            throw posix_error{};
-        connect(get_server_address(address, port));
-    }
+    char buffer[256];
+    bzero(buffer, 256);
+    fgets(buffer, 255, stdin);
 
-    template<typename Container>
-    auto write(const Container& buffer) {
-        auto n = ::write(fd_, buffer.data(), buffer.size());
-        if (n < 0)
-            throw posix_error{};
-        return n;
-    }
-
-    template<typename Container>
-    auto read(Container& buffer) {
-        auto n = ::read(fd_, buffer.data(), buffer.size() - 1);
-        if (n < 0)
-            throw posix_error{};
-        return n;
-    }
-
-private:
-    void connect(struct sockaddr_in serv_addr) {
-        if (::connect(fd_, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-            throw posix_error{};
-    }
-
-    int fd_;
-};
-
-auto gap_with_server(client& clnt) {
-    std::cout << "Please enter the message: ";
-    std::string message;
-    std::cin >> message;
-
-    clnt.write(message);
-
-    std::array<char, 256> buffer{};
-    clnt.read(buffer);
-
-    std::cout << buffer.data() << std::endl;
-
-    if (message == "bye" || message == "shutdown")
-        return false;
-
-    return true;
-}
-
-}
-}
-
-int main(int argc, char *argv[]) {
-    try {
-        auto cmd_line = argh::parser{ argv };
-        std::string address{};
-        cmd_line({ "-s", "--server" }, "localhost") >> address;
-        int portno{};
-        cmd_line({ "-p", "--port" }, 9900) >> portno;
-
-        auto clnt = gap::client::client{ address, portno };
-        
-        while (gap::client::gap_with_server(clnt)) {
-        }
-    }
-    catch(std::exception& e) {
-        std::cerr << e.what() << std::endl;
-    }
-
+    buffer[strlen(buffer) - 1] = '\0'; // remove \n from input
+    auto n = write(sockfd, buffer, strlen(buffer));
+    if (n < 0)
+        error("ERROR writing to socket.");
+    
+    bzero(buffer, 256);
+    n = read(sockfd, buffer, 255);
+    if (n < 0)
+        error("ERROR reading from socket.");
+    printf("%s\n", buffer);
     return 0;
 }

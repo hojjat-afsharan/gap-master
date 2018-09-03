@@ -10,7 +10,6 @@
 #include <system_error>
 #include <ctime>
 #include <utility>
-#include <thread>
 
 #include <unistd.h>
 #include <sys/types.h>
@@ -18,22 +17,22 @@
 #include <netinet/in.h>
 
 #include "argh.h"
-#include "exceptions.h"
 
-namespace gap {
-namespace server {
+void error() {
+    throw std::system_error{ errno, std::system_category().default_error_condition(errno).category() };
+}
 
 struct client_socket {
     explicit client_socket(int newfd) : fd_ { newfd } {
         if (fd_ < 0)
-            throw posix_error{};
+            error();
     }
 
     template<typename Container>
     auto read(Container& buffer) {
         auto n = ::read(fd_, buffer.data(), buffer.size() - 1);
         if (n < 0)
-            throw posix_error{};
+            error();
         return n;
     }
 
@@ -41,7 +40,7 @@ struct client_socket {
     auto write(const Container& buffer) {
         auto n = ::write(fd_, buffer.data(), buffer.size());
         if (n < 0)
-            throw posix_error{};
+            error();
         return n;
     }
 
@@ -53,7 +52,7 @@ struct server {
     server(int portno) {
         fd_ = socket(AF_INET, SOCK_STREAM, 0);
         if (fd_ <= 0)
-            throw posix_error{};
+            error();
         bind_to_any(portno);
     }
 
@@ -77,7 +76,7 @@ private:
         serv_addr.sin_addr.s_addr = INADDR_ANY;
         serv_addr.sin_port = htons(portno);
         if (bind(fd_, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0)
-            throw posix_error{};
+            error();
     }
 };
 
@@ -92,29 +91,17 @@ auto get_command_reply(std::string command) {
     return std::make_pair(true, std::string{ "Unknow command, but no problem." });
 }
 
-void gap_with_client(client_socket clnt) {
-    while (true) {
-        std::cout << "Wait for next command..." << std::endl;
-        auto buffer = std::array<char, 256>{};
-        if (clnt.read(buffer) <= 0) {
-            std::cout << "Client is down." << std::endl;
-            return;
-        }
+bool gap_with_client(client_socket clnt) {
+    auto buffer = std::array<char, 256>{};
+    clnt.read(buffer);
 
-        auto command = std::string{ buffer.data() };
-        std::cout << "Client says: " << command << std::endl;
+    auto command = std::string{ buffer.data() };
+    std::cout << "Client says: " << command << std::endl;
 
-        auto reply = get_command_reply(command);
-        clnt.write(reply.second);
+    auto reply = get_command_reply(command);
+    clnt.write(reply.second);
 
-        if (!reply.first) {
-            std::exit(0);
-            return;
-        }
-    };
-}
-
-}
+    return reply.first;
 }
 
 int main(int argc, char *argv[]) {
@@ -123,13 +110,12 @@ int main(int argc, char *argv[]) {
     cmd_line({ "-p", "--port" }, 9900) >> portno;
 
     try {
-        auto srv = gap::server::server{ portno };
+        auto srv = server{ portno };
         srv.start();
 
         std::cout << "gap server started listening on port: " << portno << std::endl;
 
-        while (true) {
-            std::thread{ gap::server::gap_with_client, srv.next_client() }.detach();
+        while (gap_with_client(srv.next_client())) {
         }
     }
     catch (std::exception& e) {
